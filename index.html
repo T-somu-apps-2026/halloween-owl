@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>body{margin:0}</style>
+<title>フクロウのハロウィン魔法</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<style>
+/* Layout: one dark stage, the square illustration centered, a slim control row under it */
+:root{
+  --night:#16101f;
+  --plum:#2a1d38;
+  --pumpkin:#f4a340;
+  --candle:#ffe2a8;
+  --mist:#c9bcd9;
+  --font:"Zen Maru Gothic","Hiragino Maru Gothic ProN","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{
+  background:var(--night);color:var(--candle);font-family:var(--font);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:16px;box-sizing:border-box;overflow:hidden;
+}
+.stage{
+  position:relative;width:min(100%,calc(100vh - 120px),900px);aspect-ratio:1/1;max-width:100%;
+  border-radius:14px;overflow:hidden;background:var(--plum);
+  box-shadow:0 0 0 1px rgba(244,163,64,.18),0 20px 60px rgba(0,0,0,.55);
+}
+.stage.full{border-radius:0;box-shadow:none}
+canvas{display:block;width:100%;height:100%}
+.controls{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center}
+button{
+  font:inherit;font-weight:700;font-size:14px;color:var(--night);background:var(--pumpkin);
+  border:0;border-radius:999px;padding:9px 18px;cursor:pointer;
+}
+button.ghost{background:transparent;color:var(--candle);box-shadow:inset 0 0 0 1px rgba(255,226,168,.4)}
+button:focus-visible{outline:2px solid var(--candle);outline-offset:3px}
+.hint{font-size:12px;color:var(--mist);text-align:center;max-width:36em;line-height:1.6;margin:0}
+</style>
+
+<div class="stage" id="stage"><canvas id="cv" aria-label="魔法がきらめくハロウィンのフクロウのイラスト"></canvas></div>
+<div class="controls">
+  <button id="play" type="button">一時停止</button>
+  <button id="restart" class="ghost" type="button">最初から</button>
+  <button id="fs" class="ghost" type="button">全画面</button>
+</div>
+<p class="hint">16秒でひと回りしてループします。画面録画すれば動画として保存できます。</p>
+
+<script>
+(()=>{
+const SRC="halloween.jpg", N=1254, LOOP=16;
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const stage=document.getElementById('stage');
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const img=new Image(); img.src=SRC;
+
+// --- positions in image pixels (1254 x 1254) ---
+const swirl={x:905,y:432,r:165};
+const wand={x:838,y:566};
+const pumpkins=[[60,445,60],[192,357,45],[1182,618,45],[1214,950,55],[140,1110,110],[28,830,45],
+  [362,125,30],[528,165,26],[720,207,26],[600,180,22],[230,385,30],[545,1130,70],[420,450,28]];
+const windows=[[612,75,55],[330,260,90],[600,300,60],[833,110,35],[838,230,45],[968,185,30],[410,95,40]];
+const lamps=[[38,195,40],[155,148,40],[490,232,32],[1222,348,40]];
+
+// deterministic random
+let seed=7; const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
+
+const sparkles=Array.from({length:70},()=>({x:rnd()*N,y:rnd()*N*0.85,s:3+rnd()*7,p:rnd()*LOOP,sp:0.6+rnd()*1.4,dy:4+rnd()*10}));
+const orbit=Array.from({length:26},()=>({a:rnd()*Math.PI*2,r:60+rnd()*120,s:2+rnd()*5,sp:(0.25+rnd()*0.35),p:rnd()*6}));
+const leaves=Array.from({length:9},()=>({x:rnd()*N,p:rnd(),sp:0.35+rnd()*0.3,sz:10+rnd()*8,w:rnd()*6}));
+const bats=[{y:150,dur:16,off:0,sz:26,dir:-1},{y:240,dur:16,off:7,sz:20,dir:1},{y:95,dur:16,off:11,sz:16,dir:-1}];
+
+let W=0,dpr=1;
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2);
+  const r=stage.getBoundingClientRect(); W=r.width;
+  cv.width=Math.round(W*dpr); cv.height=Math.round(W*dpr);
+}
+new ResizeObserver(resize).observe(stage);
+
+function glow(x,y,r,col,a){
+  const g=ctx.createRadialGradient(x,y,0,x,y,r);
+  g.addColorStop(0,col.replace('A',a)); g.addColorStop(1,col.replace('A',0));
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+}
+function star(x,y,s,a,col='255,246,214'){
+  ctx.fillStyle=`rgba(${col},${a})`;
+  ctx.beginPath();
+  ctx.moveTo(x,y-s); ctx.quadraticCurveTo(x,y,x+s,y); ctx.quadraticCurveTo(x,y,x,y+s);
+  ctx.quadraticCurveTo(x,y,x-s,y); ctx.quadraticCurveTo(x,y,x,y-s); ctx.fill();
+}
+function flick(t,k){ // soft candle noise 0..1
+  return 0.55+0.2*Math.sin(t*5.3+k)+0.15*Math.sin(t*9.1+k*2.3)+0.1*Math.sin(t*2.1+k*0.7);
+}
+function bat(x,y,s,t,dir){
+  const f=Math.sin(t*14)*0.6;
+  ctx.save(); ctx.translate(x,y); ctx.scale(dir,1);
+  ctx.fillStyle='rgba(40,22,48,0.92)';
+  ctx.beginPath();
+  ctx.ellipse(0,0,s*0.22,s*0.3,0,0,Math.PI*2); ctx.fill();
+  for(const side of [-1,1]){
+    ctx.beginPath(); ctx.moveTo(side*s*0.15,-s*0.05);
+    ctx.quadraticCurveTo(side*s*0.6,-s*(0.5+f*0.5),side*s*1.05,-s*f*0.4);
+    ctx.quadraticCurveTo(side*s*0.75,s*0.05,side*s*0.6,s*0.2);
+    ctx.quadraticCurveTo(side*s*0.4,s*0.05,side*s*0.15,s*0.15); ctx.fill();
+  }
+  ctx.fillStyle='rgba(255,226,168,0.9)';
+  ctx.beginPath(); ctx.arc(-s*0.08,-s*0.08,s*0.05,0,7); ctx.arc(s*0.08,-s*0.08,s*0.05,0,7); ctx.fill();
+  ctx.restore();
+}
+function leaf(x,y,s,rot,a){
+  ctx.save(); ctx.translate(x,y); ctx.rotate(rot); ctx.globalAlpha=a;
+  ctx.fillStyle='#e5762c';
+  ctx.beginPath(); ctx.ellipse(0,0,s,s*0.45,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(120,50,20,.6)'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(-s,0); ctx.lineTo(s,0); ctx.stroke();
+  ctx.restore();
+}
+
+let start=performance.now(), paused=false, pausedAt=0;
+function frame(now){
+  requestAnimationFrame(frame);
+  if(!img.complete||!W) return;
+  const t=((paused?pausedAt:now)-start)/1000;
+  const ph=(t%LOOP)/LOOP;
+  // slow push-in toward the owl and back, seamless loop
+  const z=reduce?0:(1-Math.cos(ph*Math.PI*2))/2;
+  const scale=1+0.09*z, fx=560, fy=640;
+
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const k=cv.width/N*scale;
+  // place so the focus point drifts toward center as we zoom
+  const ox=fx*(cv.width/N)-fx*k + (N/2-fx)*(cv.width/N)*z*0.25;
+  const oy=fy*(cv.width/N)-fy*k + (N/2-fy)*(cv.width/N)*z*0.25;
+  ctx.setTransform(k,0,0,k,ox,oy);
+  ctx.drawImage(img,0,0,N,N);
+
+  ctx.globalCompositeOperation='lighter';
+  // window + lamp + pumpkin glow
+  windows.forEach(([x,y,r],i)=>glow(x,y,r*1.4,'rgba(255,190,90,A)',0.10+0.08*Math.sin(t*1.2+i)));
+  lamps.forEach(([x,y,r],i)=>glow(x,y,r*1.6,'rgba(255,200,110,A)',0.16*flick(t,i*3)));
+  pumpkins.forEach(([x,y,r],i)=>glow(x,y,r*1.5,'rgba(255,140,40,A)',0.20*flick(t,i*1.7+1)));
+
+  // magic swirl: pulse + rotating ring of motes
+  glow(swirl.x,swirl.y,swirl.r*1.25,'rgba(230,160,255,A)',0.18+0.12*Math.sin(t*1.6));
+  glow(swirl.x,swirl.y+5,swirl.r*0.5,'rgba(255,190,120,A)',0.20+0.12*Math.sin(t*1.6+1));
+  orbit.forEach(o=>{
+    const a=o.a+t*o.sp*1.3, r=o.r*(0.9+0.1*Math.sin(t+o.p));
+    const x=swirl.x+Math.cos(a)*r, y=swirl.y+Math.sin(a)*r*0.55;
+    const al=0.35+0.45*Math.max(0,Math.sin(t*2+o.p));
+    glow(x,y,o.s*3,'rgba(245,200,255,A)',al*0.5);
+    star(x,y,o.s,al);
+  });
+  // trail from wand tip to swirl
+  for(let i=0;i<10;i++){
+    const u=((t*0.35+i/10)%1);
+    const x=wand.x+(swirl.x-80-wand.x)*u+Math.sin(u*9+t)*12;
+    const y=wand.y+(swirl.y+90-wand.y)*u-Math.sin(u*Math.PI)*40;
+    const al=Math.sin(u*Math.PI)*0.8;
+    glow(x,y,10,'rgba(255,230,160,A)',al*0.5); star(x,y,3+3*(1-u),al);
+  }
+  // wand star twinkle
+  const tw=0.55+0.45*Math.sin(t*3.2);
+  glow(wand.x,wand.y,55,'rgba(255,225,130,A)',0.25+0.25*tw);
+  star(wand.x,wand.y,16+10*tw,0.35+0.4*tw);
+
+  // drifting sparkles
+  sparkles.forEach(s=>{
+    const life=((t*s.sp/3+s.p)%1);
+    const al=Math.sin(life*Math.PI);
+    const y=s.y-life*s.dy*6;
+    glow(s.x,y,s.s*2.5,'rgba(255,230,180,A)',al*0.25);
+    star(s.x,y,s.s*al,al*0.9);
+  });
+  ctx.globalCompositeOperation='source-over';
+
+  // bats across the sky
+  bats.forEach((b,i)=>{
+    const u=(((t+b.off)%b.dur)/b.dur);
+    const x=b.dir<0? N+80-u*(N+160) : -80+u*(N+160);
+    const y=b.y+Math.sin(u*Math.PI*4+i)*18;
+    bat(x,y,b.sz*1.6,t+i,b.dir<0?-1:1);
+  });
+  // falling leaves
+  leaves.forEach(l=>{
+    const u=((t*l.sp/6+l.p)%1);
+    const x=l.x+Math.sin(u*Math.PI*3+l.w)*40;
+    const y=-30+u*(N*0.8);
+    leaf(x,y,l.sz,u*6+l.w,Math.sin(u*Math.PI)*0.85);
+  });
+
+  // gentle vignette
+  ctx.setTransform(1,0,0,1,0,0);
+  const v=ctx.createRadialGradient(cv.width/2,cv.height/2,cv.width*0.35,cv.width/2,cv.height/2,cv.width*0.75);
+  v.addColorStop(0,'rgba(22,16,31,0)'); v.addColorStop(1,'rgba(22,16,31,0.35)');
+  ctx.fillStyle=v; ctx.fillRect(0,0,cv.width,cv.height);
+}
+requestAnimationFrame(frame);
+
+const playBtn=document.getElementById('play');
+playBtn.onclick=()=>{
+  if(paused){start+=performance.now()-pausedAt;paused=false;playBtn.textContent='一時停止';}
+  else{pausedAt=performance.now();paused=true;playBtn.textContent='再生';}
+};
+document.getElementById('restart').onclick=()=>{start=performance.now();if(paused)pausedAt=start;};
+document.getElementById('fs').onclick=async()=>{
+  try{await stage.requestFullscreen();}catch(e){stage.classList.toggle('full');}
+};
+})();
+</script>
+
+</html>
